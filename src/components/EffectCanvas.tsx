@@ -1,6 +1,5 @@
 import React, { useRef, useEffect, useCallback } from "react";
-import { extractContours, simplifyContour } from "@/lib/contour";
-import { renderPsychedelicStrokes, type EffectSettings } from "@/lib/psychedelic";
+import { renderOutsideStroke, type EffectSettings } from "@/lib/psychedelic";
 
 interface EffectCanvasProps {
   image: HTMLImageElement | null;
@@ -17,7 +16,7 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
   const prevDownloadRef = useRef(0);
 
   const render = useCallback(
-    (targetCanvas: HTMLCanvasElement, forDownload = false) => {
+    (targetCanvas: HTMLCanvasElement) => {
       if (!image) return;
       const ctx = targetCanvas.getContext("2d");
       if (!ctx) return;
@@ -25,7 +24,6 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
       const size = settings.canvasSize;
       targetCanvas.width = size;
       targetCanvas.height = size;
-
       ctx.clearRect(0, 0, size, size);
 
       // Size image so its height is ~25% of the canvas
@@ -36,35 +34,7 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
       const imgX = (size - imgW) / 2;
       const imgY = (size - imgH) / 2;
 
-      // Extract contour from image alpha
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = image.width;
-      tempCanvas.height = image.height;
-      const tempCtx = tempCanvas.getContext("2d")!;
-      tempCtx.drawImage(image, 0, 0);
-      const imageData = tempCtx.getImageData(0, 0, image.width, image.height);
-
-      const contours = extractContours(imageData);
-      if (contours.length === 0) return;
-
-      // Use the largest contour
-      const mainContour = contours.reduce((a, b) =>
-        a.length > b.length ? a : b
-      );
-      const simplified = simplifyContour(mainContour, 2);
-
-      // Render psychedelic strokes (they compound outward from the contour)
-      renderPsychedelicStrokes(
-        ctx,
-        simplified,
-        settings,
-        imgX,
-        imgY,
-        imgScale
-      );
-
-      // Draw original image on top
-      ctx.drawImage(image, imgX, imgY, imgW, imgH);
+      renderOutsideStroke(ctx, image, settings, imgX, imgY, imgW, imgH);
     },
     [image, settings]
   );
@@ -83,7 +53,7 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
     prevDownloadRef.current = downloadTrigger;
 
     const offscreen = document.createElement("canvas");
-    render(offscreen, true);
+    render(offscreen);
 
     offscreen.toBlob((blob) => {
       if (!blob) return;
