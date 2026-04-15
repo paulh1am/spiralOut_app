@@ -37,7 +37,7 @@ const Index: React.FC = () => {
             />
           </div>
         ) : (
-          <div className="w-full max-w-md">
+          <div className="w-full" style={{ maxWidth: 700 }}>
             <h1 className="text-2xl font-bold mb-6 text-center tracking-tight">
               Psychedelic Outline Generator
             </h1>
