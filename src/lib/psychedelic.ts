@@ -12,7 +12,7 @@ export interface EffectSettings {
 }
 
 /**
- * Compute normals for each point on a closed contour.
+ * Compute outward normals for each point on a closed contour.
  */
 function computeNormals(contour: Contour): Point[] {
   const n = contour.length;
@@ -23,10 +23,41 @@ function computeNormals(contour: Contour): Point[] {
     const dx = next[0] - prev[0];
     const dy = next[1] - prev[1];
     const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    // Outward normal (perpendicular, pointing outward)
     normals.push([-dy / len, dx / len]);
   }
   return normals;
+}
+
+/**
+ * Offset a contour outward by a given distance along its normals,
+ * with optional wave modulation.
+ */
+function offsetContour(
+  contour: Contour,
+  distance: number,
+  waveAmp: number,
+  waveFreq: number
+): Contour {
+  const normals = computeNormals(contour);
+  const n = contour.length;
+  const result: Contour = [];
+
+  for (let i = 0; i < n; i++) {
+    const pt = contour[i];
+    const nm = normals[i];
+    const arcPos = i / n;
+
+    // Sinusoidal wave modulation
+    const wave = Math.sin(arcPos * Math.PI * 2 * waveFreq) * waveAmp;
+    const totalOffset = distance + wave;
+
+    result.push([
+      pt[0] + nm[0] * totalOffset,
+      pt[1] + nm[1] * totalOffset,
+    ]);
+  }
+
+  return result;
 }
 
 /**
@@ -57,6 +88,7 @@ function hexToRgb(hex: string): [number, number, number] {
 
 /**
  * Render psychedelic strokes around a contour onto a canvas context.
+ * Each stroke compounds outward from the previous stroke's deformed path.
  */
 export function renderPsychedelicStrokes(
   ctx: CanvasRenderingContext2D,
@@ -66,49 +98,46 @@ export function renderPsychedelicStrokes(
   offsetY: number,
   scale: number
 ) {
-  const normals = computeNormals(contour);
-  const n = contour.length;
+  // Scale the base contour into canvas space first
+  let currentPath: Contour = contour.map((pt) => [
+    pt[0] * scale + offsetX,
+    pt[1] * scale + offsetY,
+  ]);
 
   for (let s = 0; s < settings.strokeCount; s++) {
     const t = s / Math.max(settings.strokeCount - 1, 1);
-    const offset = (s + 1) * settings.spacing;
     const color = lerpColor(settings.colors, t % 1);
-    const waveAmp = settings.waviness * (1 + s * 0.3);
+    const waveAmp = settings.waviness * (0.5 + s * 0.15) * scale;
+    const waveFreq = 3 + s * 0.5;
 
-    // Build offset path with wave modulation
-    const path: Point[] = [];
-    for (let i = 0; i < n; i++) {
-      const pt = contour[i];
-      const nm = normals[i];
-      const arcPos = i / n;
-
-      // Sinusoidal wave modulation
-      const wave = Math.sin(arcPos * Math.PI * 2 * (3 + s * 0.5)) * waveAmp;
-
-      const totalOffset = offset + wave;
-      path.push([
-        (pt[0] + nm[0] * totalOffset) * scale + offsetX,
-        (pt[1] + nm[1] * totalOffset) * scale + offsetY,
-      ]);
-    }
+    // Offset from the CURRENT (previous) path, not the original contour
+    const nextPath = offsetContour(
+      currentPath,
+      settings.spacing * scale,
+      waveAmp,
+      waveFreq
+    );
 
     // Draw stroke with varying width using short segments
-    for (let i = 0; i < path.length; i++) {
-      const curr = path[i];
-      const next = path[(i + 1) % path.length];
+    for (let i = 0; i < nextPath.length; i++) {
+      const curr = nextPath[i];
+      const next = nextPath[(i + 1) % nextPath.length];
 
       // Noise-based width variation
       const noiseVal = noise2D(i * 0.05, s * 1.7);
       const widthMod = 1 + noiseVal * settings.widthVariance;
-      const strokeWidth = Math.max(0.5, settings.baseWidth * widthMod);
+      const strokeWidth = Math.max(0.5, settings.baseWidth * widthMod * scale);
 
       ctx.beginPath();
       ctx.moveTo(curr[0], curr[1]);
       ctx.lineTo(next[0], next[1]);
       ctx.strokeStyle = color;
-      ctx.lineWidth = strokeWidth * scale;
+      ctx.lineWidth = strokeWidth;
       ctx.lineCap = "round";
       ctx.stroke();
     }
+
+    // The next stroke will compound from this deformed path
+    currentPath = nextPath;
   }
 }
