@@ -28,15 +28,9 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
 
       ctx.clearRect(0, 0, size, size);
 
-      // Scale image to fit within canvas with padding for strokes
-      const maxStrokeExtent =
-        settings.strokeCount * settings.spacing + settings.waviness * 2;
-      const padding = maxStrokeExtent + 20;
-      const availableSize = size - padding * 2;
-      const imgScale = Math.min(
-        availableSize / image.width,
-        availableSize / image.height
-      );
+      // Size image so its height is ~25% of the canvas
+      const targetHeight = size * 0.25;
+      const imgScale = targetHeight / image.height;
       const imgW = image.width * imgScale;
       const imgH = image.height * imgScale;
       const imgX = (size - imgW) / 2;
@@ -59,7 +53,7 @@ const EffectCanvas: React.FC<EffectCanvasProps> = ({
       );
       const simplified = simplifyContour(mainContour, 2);
 
-      // Render psychedelic strokes
+      // Render psychedelic strokes (they compound outward from the contour)
       renderPsychedelicStrokes(
         ctx,
         simplified,
