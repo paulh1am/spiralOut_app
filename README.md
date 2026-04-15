@@ -1,3 +1,3 @@
-# Welcome to your Lovable project
+# Spiral out experiment backup prototyped with claude + loveable
 
-TODO: Document your project here
+
