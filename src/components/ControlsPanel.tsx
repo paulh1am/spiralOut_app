@@ -2,8 +2,14 @@ import React from "react";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Download } from "lucide-react";
+import { Download, Shuffle, Plus } from "lucide-react";
 import type { EffectSettings } from "@/lib/psychedelic";
+
+const PRESET_COLORS = [
+  "#FF6B9D", "#C084FC", "#67E8F9", "#FDE68A",
+  "#4ADE80", "#FB923C", "#818CF8", "#F472B6",
+  "#34D399", "#F87171", "#A78BFA", "#38BDF8",
+];
 
 interface ControlsPanelProps {
   settings: EffectSettings;
@@ -48,6 +54,25 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
     const colors = [...settings.colors];
     colors[index] = color;
     update({ colors });
+  };
+
+  const addColor = () => {
+    const next = PRESET_COLORS[settings.colors.length % PRESET_COLORS.length];
+    update({ colors: [...settings.colors, next] });
+  };
+
+  const removeColor = (index: number) => {
+    if (settings.colors.length <= 1) return;
+    update({ colors: settings.colors.filter((_, i) => i !== index) });
+  };
+
+  const shuffleColors = () => {
+    const arr = [...settings.colors];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    update({ colors: arr });
   };
 
   return (
@@ -106,10 +131,20 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
       />
 
       <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground">Color Palette</Label>
-        <div className="flex gap-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground">Color Palette</Label>
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1" onClick={shuffleColors}>
+              <Shuffle className="w-3 h-3" /> Shuffle
+            </Button>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1" onClick={addColor}>
+              <Plus className="w-3 h-3" /> Add
+            </Button>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
           {settings.colors.map((c, i) => (
-            <label key={i} className="relative w-10 h-10 rounded-lg overflow-hidden border border-muted cursor-pointer">
+            <label key={i} className="relative group w-9 h-9 rounded-lg overflow-hidden border border-muted cursor-pointer flex-shrink-0">
               <input
                 type="color"
                 value={c}
@@ -117,6 +152,14 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
               <div className="w-full h-full" style={{ backgroundColor: c }} />
+              {settings.colors.length > 1 && (
+                <button
+                  onClick={(e) => { e.preventDefault(); removeColor(i); }}
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity text-white text-sm font-bold leading-none"
+                >
+                  ×
+                </button>
+              )}
             </label>
           ))}
         </div>

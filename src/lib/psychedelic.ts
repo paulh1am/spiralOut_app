@@ -1,3 +1,5 @@
+import { noise2D } from "./noise";
+
 export interface EffectSettings {
   strokeCount: number;
   waviness: number;
@@ -9,9 +11,12 @@ export interface EffectSettings {
 }
 
 /**
- * Compute a distance transform from edge pixels.
- * For every transparent pixel, stores the distance to the nearest opaque pixel.
- * Uses a two-pass (row then column) squared-distance transform for efficiency.
+ * Exact 2D Euclidean distance transform (Meijster et al. 2000).
+ * For every transparent pixel, stores the true Euclidean distance to the
+ * nearest opaque edge pixel — producing perfectly smooth, round strokes.
+ *
+ * Phase 1: row-wise scan → squared horizontal distance to nearest edge seed.
+ * Phase 2: column-wise lower parabola envelope → full 2D Euclidean distance.
  */
 function computeDistanceField(
   alpha: Uint8Array,
@@ -19,58 +24,86 @@ function computeDistanceField(
   h: number,
   threshold: number
 ): Float32Array {
-  const INF = 1e10;
-  const dist = new Float32Array(w * h);
+  const INF2 = (w * w + h * h) * 2; // larger than any possible squared distance
 
-  // Initialize: 0 for opaque edge pixels, INF for everything else
-  // An "edge" pixel is opaque with at least one transparent 4-neighbor
+  // Mark edge pixels: opaque pixels that border at least one transparent neighbour
+  const isEdge = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x;
       if (alpha[i] >= threshold) {
-        // Check if this opaque pixel borders a transparent one
-        const isEdge =
+        const border =
           x === 0 || x === w - 1 || y === 0 || y === h - 1 ||
           alpha[i - 1] < threshold ||
           alpha[i + 1] < threshold ||
           alpha[i - w] < threshold ||
           alpha[i + w] < threshold;
-        dist[i] = isEdge ? 0 : -1; // -1 marks interior (inside the shape)
-      } else {
-        dist[i] = INF;
+        if (border) isEdge[i] = 1;
       }
     }
   }
 
-  // Brute-force is too slow for large images. Use a fast Chamfer-style
-  // two-pass approximation (forward + backward) with Euclidean weights.
-  // Forward pass (top-left to bottom-right)
+  // Phase 1: per-row squared horizontal distance to nearest edge seed
+  const g = new Float32Array(w * h).fill(INF2);
   for (let y = 0; y < h; y++) {
+    let nearX = -1;
     for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (dist[i] === -1) continue; // interior
-      if (dist[i] === 0) continue;  // edge seed
-      let d = dist[i];
-      if (x > 0 && dist[i - 1] >= 0) d = Math.min(d, dist[i - 1] + 1);
-      if (y > 0 && dist[i - w] >= 0) d = Math.min(d, dist[i - w] + 1);
-      if (x > 0 && y > 0 && dist[i - w - 1] >= 0) d = Math.min(d, dist[i - w - 1] + 1.414);
-      if (x < w - 1 && y > 0 && dist[i - w + 1] >= 0) d = Math.min(d, dist[i - w + 1] + 1.414);
-      dist[i] = d;
+      if (isEdge[y * w + x]) { nearX = x; g[y * w + x] = 0; }
+      else if (nearX >= 0) { const d = x - nearX; g[y * w + x] = d * d; }
+    }
+    nearX = -1;
+    for (let x = w - 1; x >= 0; x--) {
+      if (isEdge[y * w + x]) nearX = x;
+      else if (nearX >= 0) {
+        const d2 = (nearX - x) * (nearX - x);
+        if (d2 < g[y * w + x]) g[y * w + x] = d2;
+      }
     }
   }
 
-  // Backward pass (bottom-right to top-left)
-  for (let y = h - 1; y >= 0; y--) {
-    for (let x = w - 1; x >= 0; x--) {
-      const i = y * w + x;
-      if (dist[i] === -1) continue;
-      if (dist[i] === 0) continue;
-      let d = dist[i];
-      if (x < w - 1 && dist[i + 1] >= 0) d = Math.min(d, dist[i + 1] + 1);
-      if (y < h - 1 && dist[i + w] >= 0) d = Math.min(d, dist[i + w] + 1);
-      if (x < w - 1 && y < h - 1 && dist[i + w + 1] >= 0) d = Math.min(d, dist[i + w + 1] + 1.414);
-      if (x > 0 && y < h - 1 && dist[i + w - 1] >= 0) d = Math.min(d, dist[i + w - 1] + 1.414);
-      dist[i] = d;
+  // Phase 2: per-column 2D distance via lower parabola envelope
+  const dist = new Float32Array(w * h);
+  const stk = new Int32Array(h);    // parabola centres (row indices)
+  const cross = new Float32Array(h); // crossover y-values between adjacent parabolas
+
+  for (let x = 0; x < w; x++) {
+    // Build lower envelope
+    let top = 0;
+    stk[0] = 0;
+    cross[0] = -Infinity;
+
+    for (let u = 1; u < h; u++) {
+      const gu = g[u * w + x];
+      // Pop dominated parabolas: if crossover(prev, u) <= crossover(prev, top),
+      // the current top is never the minimum and can be discarded.
+      while (top > 0) {
+        const b = stk[top - 1];
+        const gb = g[b * w + x];
+        const yc = (gu + u * u - gb - b * b) / (2 * (u - b));
+        if (yc <= cross[top]) { top--; } else { break; }
+      }
+      top++;
+      stk[top] = u;
+      const prev = stk[top - 1];
+      const gprev = g[prev * w + x];
+      cross[top] = (gu + u * u - gprev - prev * prev) / (2 * (u - prev));
+    }
+
+    // Assign Euclidean distances column by column
+    let j = 0;
+    for (let u = 0; u < h; u++) {
+      while (j < top && cross[j + 1] <= u) j++;
+      const a = stk[j];
+      const dy = u - a;
+      const i = u * w + x;
+
+      if (alpha[i] >= threshold && !isEdge[i]) {
+        dist[i] = -1; // interior opaque pixel — not painted
+      } else if (isEdge[i]) {
+        dist[i] = 0;
+      } else {
+        dist[i] = Math.sqrt(dy * dy + g[a * w + x]);
+      }
     }
   }
 
@@ -87,13 +120,12 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 /**
- * Render stroke around image using alpha-channel dilation (Photoshop-style outside stroke).
- * 
- * 1. Rasterize the image onto the canvas at the target position/scale
- * 2. Read the alpha channel to get the silhouette
- * 3. Compute distance field from silhouette edge outward
- * 4. Paint pixels where 0 < distance <= strokeWidth with the stroke color
- * 5. Draw the original image on top
+ * Render expanding psychedelic strokes outward from the image silhouette.
+ *
+ * Each stroke band occupies a ring at distance [k*period, k*period + bandWidth]
+ * from the edge, where bandWidth varies per-band (widthVariance) and the
+ * band boundaries are displaced per-pixel by Perlin noise (waviness).
+ * Colors cycle through the palette.
  */
 export function renderOutsideStroke(
   ctx: CanvasRenderingContext2D,
@@ -106,7 +138,6 @@ export function renderOutsideStroke(
 ) {
   const size = settings.canvasSize;
 
-  // Step 1: Draw the image to extract its alpha footprint on the full canvas
   const tempCanvas = document.createElement("canvas");
   tempCanvas.width = size;
   tempCanvas.height = size;
@@ -114,36 +145,70 @@ export function renderOutsideStroke(
   tempCtx.drawImage(image, imgX, imgY, imgW, imgH);
   const imgData = tempCtx.getImageData(0, 0, size, size);
 
-  // Step 2: Extract alpha into a flat array
   const alpha = new Uint8Array(size * size);
   for (let i = 0; i < size * size; i++) {
     alpha[i] = imgData.data[i * 4 + 3];
   }
 
-  // Step 3: Compute distance field from edge
   const dist = computeDistanceField(alpha, size, size, 128);
 
-  // Step 4: Paint the stroke ring into the output
-  const strokeWidth = settings.baseWidth;
-  const color = hexToRgb(settings.colors[0] || "#FF6B9D");
+  // Fixed period: baseWidth + spacing. Within each period, the visible stroke
+  // width varies per band (widthVariance) giving organic thickness changes.
+  const period = settings.baseWidth + settings.spacing;
+
+  // Noise: ~25 wave cycles across the canvas at any resolution
+  const noiseFreq = 25 / size;
+  // Wave displacement amplitude: scales with baseWidth so it looks proportional
+  const waveAmp = (settings.waviness / 100) * settings.baseWidth * 0.8;
+
+  const maxDist = settings.strokeCount * period + waveAmp + 2;
+
   const outData = ctx.getImageData(0, 0, size, size);
   const pixels = outData.data;
+  const colorCount = settings.colors.length || 1;
 
-  for (let i = 0; i < size * size; i++) {
-    const d = dist[i];
-    if (d > 0 && d <= strokeWidth) {
-      const pi = i * 4;
-      // Smooth anti-aliased edge at the outer boundary
-      const edgeAlpha = d > strokeWidth - 1 ? (strokeWidth - d + 1) : 1;
-      pixels[pi] = color[0];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = y * size + x;
+      const d = dist[idx];
+      if (d <= 0 || d > maxDist) continue;
+
+      // Displace the effective distance with smooth noise → wavy band edges
+      const n = noise2D(x * noiseFreq, y * noiseFreq); // -1..1
+      const effectiveDist = d + n * waveAmp;
+      if (effectiveDist <= 0) continue;
+
+      const bandIndex = Math.floor(effectiveDist / period);
+      if (bandIndex < 0 || bandIndex >= settings.strokeCount) continue;
+
+      const posInBand = effectiveDist - bandIndex * period;
+
+      // Per-band width variation using a deterministic offset per band
+      const widthMult = 1 + settings.widthVariance * Math.sin(bandIndex * 1.618 + 0.5);
+      const bandWidth = Math.max(1, settings.baseWidth * widthMult);
+
+      if (posInBand > bandWidth) continue;
+
+      const color = hexToRgb(settings.colors[bandIndex % colorCount]);
+      const pi = idx * 4;
+
+      // Soft anti-alias on both inner and outer edges of each band
+      let a255: number;
+      if (posInBand < 1) {
+        a255 = Math.round(posInBand * 255);
+      } else if (posInBand > bandWidth - 1) {
+        a255 = Math.round((bandWidth - posInBand) * 255);
+      } else {
+        a255 = 255;
+      }
+
+      pixels[pi]     = color[0];
       pixels[pi + 1] = color[1];
       pixels[pi + 2] = color[2];
-      pixels[pi + 3] = Math.round(edgeAlpha * 255);
+      pixels[pi + 3] = Math.max(0, a255);
     }
   }
 
   ctx.putImageData(outData, 0, 0);
-
-  // Step 5: Draw original image on top
   ctx.drawImage(image, imgX, imgY, imgW, imgH);
 }
