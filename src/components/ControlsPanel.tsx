@@ -108,10 +108,18 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
       <SliderRow
         label="Stroke Width"
         value={settings.baseWidth}
-        min={20}
+        min={5}
         max={100}
         step={1}
         onChange={(v) => update({ baseWidth: v })}
+      />
+      <SliderRow
+        label="Stroke Widening"
+        value={settings.widening}
+        min={0}
+        max={20}
+        step={1}
+        onChange={(v) => update({ widening: v })}
       />
       <SliderRow
         label="Width Variance"
@@ -124,8 +132,8 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
       <SliderRow
         label="Stroke Spacing"
         value={settings.spacing}
-        min={2}
-        max={30}
+        min={-10}
+        max={25}
         step={1}
         onChange={(v) => update({ spacing: v })}
       />
@@ -163,6 +171,19 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
             </label>
           ))}
         </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <Label className="text-xs text-muted-foreground">Background</Label>
+        <label className="relative w-9 h-9 rounded-lg overflow-hidden border border-muted cursor-pointer flex-shrink-0">
+          <input
+            type="color"
+            value={settings.bgColor}
+            onChange={(e) => update({ bgColor: e.target.value })}
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          />
+          <div className="w-full h-full" style={{ backgroundColor: settings.bgColor }} />
+        </label>
       </div>
 
       <Button

@@ -5,8 +5,10 @@ export interface EffectSettings {
   waviness: number;
   baseWidth: number;
   widthVariance: number;
+  widening: number;
   spacing: number;
   colors: string[];
+  bgColor: string;
   canvasSize: number;
 }
 
@@ -122,10 +124,10 @@ function hexToRgb(hex: string): [number, number, number] {
 /**
  * Render expanding psychedelic strokes outward from the image silhouette.
  *
- * Each stroke band occupies a ring at distance [k*period, k*period + bandWidth]
- * from the edge, where bandWidth varies per-band (widthVariance) and the
- * band boundaries are displaced per-pixel by Perlin noise (waviness).
- * Colors cycle through the palette.
+ * Band positions are precomputed with progressive widening and variable spacing.
+ * Band boundaries are displaced per-pixel by Perlin noise (waviness).
+ * The canvas background and silhouette interior are filled with user-chosen colors.
+ * Colors cycle through the palette across bands.
  */
 export function renderOutsideStroke(
   ctx: CanvasRenderingContext2D,
@@ -138,6 +140,7 @@ export function renderOutsideStroke(
 ) {
   const size = settings.canvasSize;
 
+  // Extract alpha silhouette
   const tempCanvas = document.createElement("canvas");
   tempCanvas.width = size;
   tempCanvas.height = size;
@@ -152,63 +155,87 @@ export function renderOutsideStroke(
 
   const dist = computeDistanceField(alpha, size, size, 128);
 
-  // Fixed period: baseWidth + spacing. Within each period, the visible stroke
-  // width varies per band (widthVariance) giving organic thickness changes.
-  const period = settings.baseWidth + settings.spacing;
+  // Precompute band start/end positions.
+  // Each band k has width = (baseWidth + k*widening) * widthVarianceMult.
+  // Spacing can be negative to create overlapping strokes.
+  const bandStarts = new Float32Array(settings.strokeCount);
+  const bandEnds   = new Float32Array(settings.strokeCount);
+  let cursor = 0;
+  for (let k = 0; k < settings.strokeCount; k++) {
+    const baseW = settings.baseWidth + k * settings.widening;
+    const widthMult = 1 + settings.widthVariance * Math.sin(k * 1.618 + 0.5);
+    const bw = Math.max(1, baseW * widthMult);
+    bandStarts[k] = cursor;
+    bandEnds[k]   = cursor + bw;
+    // Advance cursor; clamp to always move forward by at least 1px
+    cursor += Math.max(1, bw + settings.spacing);
+  }
 
-  // Noise: ~25 wave cycles across the canvas at any resolution
   const noiseFreq = 25 / size;
-  // Wave displacement amplitude: scales with baseWidth so it looks proportional
-  const waveAmp = (settings.waviness / 100) * settings.baseWidth * 0.8;
+  const waveAmp   = (settings.waviness / 100) * settings.baseWidth * 0.8;
+  const maxDist   = bandEnds[settings.strokeCount - 1] + waveAmp + 2;
 
-  const maxDist = settings.strokeCount * period + waveAmp + 2;
-
-  const outData = ctx.getImageData(0, 0, size, size);
-  const pixels = outData.data;
+  const bgRgb   = hexToRgb(settings.bgColor || "#000000");
   const colorCount = settings.colors.length || 1;
 
+  const outData = ctx.getImageData(0, 0, size, size);
+  const pixels  = outData.data;
+
+  // Fill entire canvas with background color
+  for (let i = 0; i < size * size; i++) {
+    const pi = i * 4;
+    pixels[pi]     = bgRgb[0];
+    pixels[pi + 1] = bgRgb[1];
+    pixels[pi + 2] = bgRgb[2];
+    pixels[pi + 3] = 255;
+  }
+
+  // Paint expanding stroke bands (exterior pixels only)
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const idx = y * size + x;
       const d = dist[idx];
       if (d <= 0 || d > maxDist) continue;
 
-      // Displace the effective distance with smooth noise → wavy band edges
-      const n = noise2D(x * noiseFreq, y * noiseFreq); // -1..1
-      const effectiveDist = d + n * waveAmp;
-      if (effectiveDist <= 0) continue;
+      const n = noise2D(x * noiseFreq, y * noiseFreq);
+      const ed = d + n * waveAmp; // noise-displaced effective distance
+      if (ed <= 0) continue;
 
-      const bandIndex = Math.floor(effectiveDist / period);
-      if (bandIndex < 0 || bandIndex >= settings.strokeCount) continue;
-
-      const posInBand = effectiveDist - bandIndex * period;
-
-      // Per-band width variation using a deterministic offset per band
-      const widthMult = 1 + settings.widthVariance * Math.sin(bandIndex * 1.618 + 0.5);
-      const bandWidth = Math.max(1, settings.baseWidth * widthMult);
-
-      if (posInBand > bandWidth) continue;
-
-      const color = hexToRgb(settings.colors[bandIndex % colorCount]);
-      const pi = idx * 4;
-
-      // Soft anti-alias on both inner and outer edges of each band
-      let a255: number;
-      if (posInBand < 1) {
-        a255 = Math.round(posInBand * 255);
-      } else if (posInBand > bandWidth - 1) {
-        a255 = Math.round((bandWidth - posInBand) * 255);
-      } else {
-        a255 = 255;
+      // Find the innermost band containing ed (linear scan; strokeCount ≤ 30)
+      let k = -1;
+      for (let b = 0; b < settings.strokeCount; b++) {
+        if (ed > bandEnds[b]) continue;
+        if (ed < bandStarts[b]) break; // bands are ordered; no further match
+        k = b;
+        break;
       }
+      if (k === -1) continue;
 
-      pixels[pi]     = color[0];
-      pixels[pi + 1] = color[1];
-      pixels[pi + 2] = color[2];
-      pixels[pi + 3] = Math.max(0, a255);
+      const bStart = bandStarts[k];
+      const bEnd   = bandEnds[k];
+      const pos    = ed - bStart;
+      const bw     = bEnd - bStart;
+
+      // Soft anti-alias on both edges of the band
+      let alpha255: number;
+      if (pos < 1)        { alpha255 = Math.round(pos * 255); }
+      else if (pos > bw - 1) { alpha255 = Math.round((bw - pos) * 255); }
+      else                { alpha255 = 255; }
+      if (alpha255 <= 0) continue;
+
+      // Blend stroke color over background inline (output is always opaque)
+      const c  = hexToRgb(settings.colors[k % colorCount]);
+      const t  = alpha255 / 255;
+      const pi = idx * 4;
+      pixels[pi]     = Math.round(c[0] * t + bgRgb[0] * (1 - t));
+      pixels[pi + 1] = Math.round(c[1] * t + bgRgb[1] * (1 - t));
+      pixels[pi + 2] = Math.round(c[2] * t + bgRgb[2] * (1 - t));
+      pixels[pi + 3] = 255;
     }
   }
 
   ctx.putImageData(outData, 0, 0);
+
+  // Draw the original image on top so it's always visible
   ctx.drawImage(image, imgX, imgY, imgW, imgH);
 }
