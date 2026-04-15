@@ -8,7 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 const DEFAULT_SETTINGS: EffectSettings = {
   strokeCount: 15,
   waviness: 20,
-  baseWidth: 3,
+  baseWidth: 30,
   widthVariance: 0.4,
   spacing: 8,
   colors: ["#FF6B9D", "#C084FC", "#67E8F9", "#FDE68A"],
