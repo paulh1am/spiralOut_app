@@ -81,11 +81,11 @@ const ControlsPanel: React.FC<ControlsPanelProps> = ({
         onChange={(v) => update({ waviness: v })}
       />
       <SliderRow
-        label="Base Stroke Width"
+        label="Stroke Width"
         value={settings.baseWidth}
-        min={1}
-        max={20}
-        step={0.5}
+        min={20}
+        max={100}
+        step={1}
         onChange={(v) => update({ baseWidth: v })}
       />
       <SliderRow
